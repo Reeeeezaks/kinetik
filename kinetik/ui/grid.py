@@ -25,7 +25,8 @@ SUB = Qt.ItemDataRole.UserRole + 4
 
 BADGE_COLORS = {"Video": "#3584e4", "GIF": "#9141ac", "Image": "#6f8396", "Scene": "#e66100",
                 "WE Video": "#c64600", "Web": "#2190a4", "4K": "#26a269", "HD": "#3584e4",
-                "Workshop": "#e66100"}
+                "Workshop": "#e66100",
+                "⚠ Partly works": "#9c6e03", "⚠ Won't look right": "#c01c28", "✖ May crash": "#a51d2d"}
 
 
 def cover(pm: QPixmap, size: QSize) -> QPixmap:

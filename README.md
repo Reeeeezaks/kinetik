@@ -65,6 +65,20 @@ make run                           # or run from the source tree
 make uninstall PREFIX=$HOME/.local
 ```
 
+## Scene compatibility
+
+The KDE scene renderer only draws image, particle, sound and light objects. Text layers (clocks, labels),
+shapes, 3D models, camera paths, shadows and SceneScript are not supported. Kinetik checks every
+Workshop scene and marks it **⚠ Partly works**, **⚠ Won't look right** or **✖ May crash**, with the reasons
+in the details panel and a *Compatibility issues* filter. It learns from three things: the scene package
+itself, the errors the renderer logs after loading a scene, and Plasma crashes right after a scene loads.
+
+**Plasma crash fix**: the upstream plugin can crash plasmashell when scenes are switched quickly or a screen
+is rotated/reconnected (its render thread calls back into a deleted object). Apply
+[`patches/wallpaper-engine-kde-plugin-node-guard.patch`](patches/wallpaper-engine-kde-plugin-node-guard.patch)
+before building it (`git apply` in the plugin's source folder). Kinetik also spaces out scene switches by
+2.5 s to avoid the race.
+
 ## Known issues
 
 - Scene "user properties" (colour pickers and toggles inside a scene) are not supported by the KDE scene renderer.

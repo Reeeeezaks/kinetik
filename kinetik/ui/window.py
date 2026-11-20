@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame
                                QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
-from .. import APP_NAME, __version__, engine, library, paths, plasma
+from .. import APP_NAME, __version__, compat, engine, library, paths, plasma
 from ..library import Item, human_size
 from ..settings import AUDIO_CHOICES, BLUR_CHOICES, PAUSE_CHOICES, ItemOptions, Playlist, Store
 from ..sources import SOURCES, UA, Result, Workshop
@@ -35,7 +35,10 @@ FILTERS = (("All wallpapers", lambda i, f: True), ("Favourites", lambda i, f: i.
            ("Images", lambda i, f: i.kind == "image"),
            ("Wallpaper Engine: Scenes", lambda i, f: i.kind == "scene"),
            ("Wallpaper Engine: Videos", lambda i, f: i.kind == "we-video"),
-           ("Wallpaper Engine: Web", lambda i, f: i.kind == "web"))
+           ("Wallpaper Engine: Web", lambda i, f: i.kind == "web"),
+           ("Compatibility issues", lambda i, f: bool(i.compat) and i.compat.level != compat.OK))
+COMPAT_BADGE = {compat.PARTIAL: "⚠ Partly works", compat.BROKEN: "⚠ Won't look right", compat.CRASH: "✖ May crash"}
+SCENE_SWITCH_GAP_MS = 2500   # let the Wallpaper Engine renderer settle between scene switches
 SORTS = ("Newest first", "Name", "Largest first", "Type")
 
 
@@ -566,6 +569,7 @@ class MainWindow(QMainWindow):
         lib.mkdir(parents=True, exist_ok=True)
         self.items = library.scan(lib)
         self.by_key = {i.key: i for i in self.items}
+        self._check_compat()
         dirs = [str(lib)] + [str(d) for d in library.workshop_dirs()]
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
@@ -594,7 +598,7 @@ class MainWindow(QMainWindow):
         self.grid.clear()
         for i in shown:
             sub = f"{i.label} · {human_size(i.size)}"
-            w = self.grid.add(i.title, i, badge=i.label, sub=sub, fav=i.key in self.store.favorites,
+            w = self.grid.add(i.title, i, badge=self._badges(i), sub=sub, fav=i.key in self.store.favorites,
                               pixmap=self._item_thumb(i))
             if i.key == sel_key:
                 w.setSelected(True)
@@ -650,6 +654,23 @@ class MainWindow(QMainWindow):
             self.on_grid.clearSelection()
             self._close_rpanel()
 
+    def _check_compat(self) -> None:
+        """Mark Wallpaper Engine items that the KDE renderer can't fully show (or that crashed Plasma)."""
+        if not hasattr(self, "_compat_cache"):
+            self._compat_cache: dict = {}
+        try:
+            db = compat.update_from_journal()
+        except OSError:
+            db = {}
+        for i in self.items:
+            if i.is_we:
+                i.compat = compat.check(i.path, i.kind, i.wid, db, self._compat_cache)
+
+    @staticmethod
+    def _badges(i: Item) -> str:
+        extra = COMPAT_BADGE.get(i.compat.level) if i.compat else None
+        return i.label + (f"|{extra}" if extra else "")
+
     def _lib_selected(self) -> None:
         sel = self.grid.selectedItems()
         if not sel:
@@ -658,6 +679,11 @@ class MainWindow(QMainWindow):
         self.panel_box.show()
         it: Item = sel[-1].data(DATA)
         note = ""
+        if it.compat and it.compat.level != compat.OK:
+            head = {compat.PARTIAL: "⚠ Partly works with the KDE renderer:",
+                    compat.BROKEN: "⚠ Won't look right with the KDE renderer:",
+                    compat.CRASH: "✖ This scene crashed Plasma:"}[it.compat.level]
+            note = head + "\n" + "\n".join(f"•  {x}" for x in it.compat.issues)
         if it.kind in ("scene", "web") and not library.we_install_library():
             note = "Needs Wallpaper Engine installed in Steam (Settings → Wallpaper Engine)."
         if len(sel) > 1:
@@ -766,9 +792,25 @@ class MainWindow(QMainWindow):
         self._import([Path(u.toLocalFile()) for u in e.mimeData().urls() if u.isLocalFile()])
 
     # ================================================================== apply
-    def apply_item(self, item: Item, screens: Optional[List[int]] = None) -> None:
+    def apply_item(self, item: Item, screens: Optional[List[int]] = None, confirmed: bool = False) -> None:
         t = screens or self.targets()
         if not t:
+            return
+        if item.compat and item.compat.level == compat.CRASH and not confirmed:
+            box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME,
+                              f"“{item.title}” crashed Plasma before:\n\n" + "\n".join(item.compat.issues) +
+                              "\n\nIf it crashes again, the taskbar restarts by itself after a second.",
+                              parent=self)
+            box.addButton("Apply anyway", QMessageBox.ButtonRole.AcceptRole)
+            forget = box.addButton("It works now, forget the crash", QMessageBox.ButtonRole.ActionRole)
+            cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is cancel:
+                return
+            if box.clickedButton() is forget:
+                compat.clear(item.wid)
+                self.refresh_library()
+        if item.kind in ("scene", "web") and not self._scene_switch_ready(item, t):
             return
         o = self.store.item_options(item.key)
         try:
@@ -796,6 +838,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, f"Plasma refused the wallpaper:\n{exc}")
             return
         self._applied(item, len(t))
+
+    def _scene_switch_ready(self, item: Item, t: List[int]) -> bool:
+        """Pace scene switches: rapid reloads are what crashed the Wallpaper Engine renderer.
+        If the last switch was too recent, remember only the newest request and apply it later."""
+        import time
+        last = getattr(self, "_last_scene_switch", 0.0)
+        wait_ms = int(SCENE_SWITCH_GAP_MS - (time.monotonic() - last) * 1000)
+        if wait_ms <= 0:
+            self._last_scene_switch = time.monotonic()
+            return True
+        self._pending_scene = (item, t)
+        if not getattr(self, "_scene_timer", None):
+            self._scene_timer = self._timer(wait_ms, self._apply_pending_scene)
+        self._scene_timer.start(wait_ms)
+        self.toast.show_message("Switching scene in a moment…", 1.5)
+        return False
+
+    def _apply_pending_scene(self) -> None:
+        pending = getattr(self, "_pending_scene", None)
+        self._pending_scene = None
+        if pending:
+            self.apply_item(pending[0], pending[1], confirmed=True)
 
     def _apply_cfg(self, t, plugin, cfg, item: Item) -> None:
         try:

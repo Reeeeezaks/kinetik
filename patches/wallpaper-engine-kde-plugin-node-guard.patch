@@ -1,0 +1,84 @@
+diff --git a/src/backend_scene/qml_helper/SceneBackend.cpp b/src/backend_scene/qml_helper/SceneBackend.cpp
+index d24cfa3..005f19b 100644
+--- a/src/backend_scene/qml_helper/SceneBackend.cpp
++++ b/src/backend_scene/qml_helper/SceneBackend.cpp
+@@ -17,6 +17,7 @@
+ 
+ #include <clocale>
+ #include <atomic>
++#include <mutex>
+ #include <array>
+ #include <functional>
+ 
+@@ -71,6 +72,18 @@ using sp_scene_t = std::shared_ptr<wallpaper::SceneWallpaper>;
+ namespace scenebackend
+ {
+ 
++class TextureNode;
++
++// Kinetik fix: the render thread keeps the redraw / first-frame callbacks after the
++// scene-graph node is destroyed (wallpaper reload, screen rotation/hotplug), and used to
++// call into the deleted node -> plasmashell crash in QObject signal activation.
++// Callbacks now go through this guard; the node detaches itself under the lock first thing
++// in its destructor, so a late callback becomes a no-op.
++struct NodeGuard {
++    std::mutex   mutex;
++    TextureNode* node { nullptr };
++};
++
+ class TextureNode : public QObject, public QSGSimpleTextureNode {
+     Q_OBJECT
+ public:
+@@ -81,7 +94,9 @@ public:
+           m_enable_valid(valid),
+           m_eatFrameOp(eatFrameOp),
+           m_window(window),
+-          m_first_frame(false) {
++          m_first_frame(false),
++          m_guard(std::make_shared<NodeGuard>()) {
++        m_guard->node = this;
+         // texture node must have a texture, so use the default 0 texture.
+         m_texture      = createTextureFromGl(0, QSize(64, 64), window);
+         m_init_texture = m_texture;
+@@ -91,6 +106,10 @@ public:
+     }
+ 
+     ~TextureNode() override {
++        {
++            std::lock_guard<std::mutex> lock(m_guard->mutex);
++            m_guard->node = nullptr;   // render-thread callbacks are no-ops from now on
++        }
+         for (auto& item : texs_map) {
+             auto& exh = item.second;
+             // close(exh.fd);
+@@ -114,13 +133,17 @@ public:
+         info.uuid               = m_glex.uuid();
+         info.width              = w;
+         info.height             = h;
+-        info.redraw_callback    = [this]() {
+-            Q_EMIT this->redraw();
++        std::shared_ptr<NodeGuard> guard = m_guard;
++        info.redraw_callback    = [guard]() {
++            std::lock_guard<std::mutex> lock(guard->mutex);
++            if (guard->node) Q_EMIT guard->node->redraw();
+         };
+ 
+-        auto cb = std::make_shared<wallpaper::FirstFrameCallback>([this]() {
+-            m_first_frame = true;
+-            Q_EMIT this->redraw();
++        auto cb = std::make_shared<wallpaper::FirstFrameCallback>([guard]() {
++            std::lock_guard<std::mutex> lock(guard->mutex);
++            if (! guard->node) return;
++            guard->node->m_first_frame = true;
++            Q_EMIT guard->node->redraw();
+         });
+         m_scene->setPropertyObject(wallpaper::PROPERTY_FIRST_FRAME_CALLBACK, cb);
+         // this send to looper, not in this thread
+@@ -181,6 +204,7 @@ private:
+     EatFrameOp        m_eatFrameOp;
+     QQuickWindow*     m_window;
+     std::atomic<bool> m_first_frame;
++    std::shared_ptr<NodeGuard> m_guard;
+ 
+     GlExtra m_glex;
+ 

@@ -30,6 +30,7 @@ class Item:
     we_file: str = ""         # project.json "file"
     tags: List[str] = field(default_factory=list)
     rating: str = ""          # Workshop content rating
+    compat: object = None     # compat.Compat for Wallpaper Engine items (set by the window)
 
     @property
     def is_we(self) -> bool:
