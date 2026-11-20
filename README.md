@@ -5,7 +5,7 @@ scenes, videos and web wallpapers from the Steam Workshop, with a built-in brows
 MoeWalls and the Workshop. A Wallpaper Engine–style app for Linux, in the same style as its sibling
 [Kolorful](https://github.com/Reeeeezaks/kolorful).
 
-![Kinetik](docs/screenshot.png)
+![Kinetik](docs/kinetik-library.png)
 
 > [!WARNING]
 > **This project is entirely vibe coded.** It was written by an AI assistant (Claude) guided by one person,
