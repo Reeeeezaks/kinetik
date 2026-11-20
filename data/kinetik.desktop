@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kinetik
+GenericName=Live Wallpapers
+Comment=Animated wallpapers for KDE Plasma: videos, GIFs and Wallpaper Engine
+Exec=kinetik
+Icon=kinetik
+Terminal=false
+Categories=Qt;KDE;Settings;DesktopSettings;
+Keywords=wallpaper;live;animated;video;gif;wallpaper engine;workshop;background;
+StartupNotify=true

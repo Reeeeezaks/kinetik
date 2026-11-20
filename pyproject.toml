@@ -1,0 +1,16 @@
+[project]
+name = "kinetik"
+dynamic = ["version"]
+description = "Live wallpapers for KDE Plasma: videos, GIFs and Wallpaper Engine scenes"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.5"]
+
+[project.scripts]
+kinetik = "kinetik.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "kinetik.__version__" }
+
+[tool.setuptools.package-data]
+kinetik = ["assets/*.svg"]
